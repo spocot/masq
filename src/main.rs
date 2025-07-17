@@ -1,5 +1,13 @@
+mod parser;
+mod targets {
+    pub mod target;
+}
+
 use clap::Parser;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::fs;
+use targets::target::{Gtk3Target, MasqTarget, SwayTarget};
 
 #[derive(Deserialize, Debug)]
 struct Config {
@@ -8,60 +16,86 @@ struct Config {
 
 #[derive(Deserialize, Debug)]
 struct Theme {
-    accent: u16,
+    accent: u32,
+    accent_deep: u32,
+    foreground: u32,
+    complement: u32,
+    dark: u32,
+    light_dark: u32,
 }
 
-/// Masq is a command-line tool for applying a shared base colorscheme theme to multiple target applications, toolkits, or libraries.
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    commands: Commands,
+impl std::fmt::Display for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Config {{ theme: {} }}", self.theme)
+    }
 }
 
-#[derive(clap::Subcommand, Debug)]
-enum Commands {
-    /// Apply a theme to one or more targets
-    Apply {
-        /// The masq file of the theme to apply
-        #[arg(short, long)]
-        file: String,
-
-        /// The list of targets to apply the theme to
-        #[arg(required = true, short, long, num_args = 1.., value_delimiter = ',')]
-        targets: Vec<String>,
-    },
-    /// Generate a masq theming file based on the passed theme colors
-    Generate {
-        /// The name of the masq file to generate
-        #[arg(short, long)]
-        output: String,
-
-        /// The color settings to save to the generated masq file
-        #[arg(required = true, short, long, num_args = 6, value_names = &[
-            "ACCENT",
-            "ACCENT_DEEP",
-            "FOREGROUND",
-            "COMPLEMENT",
-            "DARK",
-            "LIGHT_DARK"
-        ])]
-        colors: Vec<String>,
-    },
+impl std::fmt::Display for Theme {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Theme {{ \
+                   accent: {:#x} \
+                   accent_deep: {:#x} \
+                   foreground: {:#x} \
+                   complement: {:#x} \
+                   dark: {:#x} \
+                   light_dark: {:#x} }}",
+            self.accent,
+            self.accent_deep,
+            self.foreground,
+            self.complement,
+            self.dark,
+            self.light_dark
+        )
+    }
 }
 
 fn main() {
-    let args = Cli::parse();
+    let args = parser::Cli::parse();
+    println!("args:\n{:?}", args);
+
+    let available_targets: HashMap<&str, &dyn MasqTarget> = HashMap::from([
+        ("sway", &SwayTarget as &dyn MasqTarget),
+        ("gtk3", &Gtk3Target as &dyn MasqTarget),
+    ]);
+
     match &args.commands {
-        Commands::Apply { file, targets } => {
+        parser::Commands::Apply { file, targets } => {
             println!("Applying theme from file: {}", file);
             println!("Targets: {:?}", targets);
+
+            let config_file = fs::read_to_string(file);
+            match config_file {
+                Ok(config_content) => {
+                    let config: Config =
+                        toml::from_str(&config_content).expect("Failed to parse config");
+                    println!("Parsed config: {}", config);
+                    let theme = config.theme;
+
+                    for target_name in targets {
+                        let target = available_targets.get(target_name.to_lowercase().as_str());
+                        match target {
+                            Some(t) => {
+                                println!("Applying theme to target: {}", t.get_name());
+                                if let Err(e) = t.apply(&theme) {
+                                    eprintln!("Error applying theme to {}: {}", t.get_name(), e);
+                                }
+                            }
+                            None => {
+                                eprintln!("Target '{}' not found", target_name);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading file {}: {}", file, e);
+                }
+            }
         }
-        Commands::Generate { output, colors } => {
+        parser::Commands::Generate { output, colors } => {
             println!("Generating masq file: {}", output);
             println!("Colors: {:?}", colors);
         }
     }
-
-    println!("config:\n{:?}", args)
 }
